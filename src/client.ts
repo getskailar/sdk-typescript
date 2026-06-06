@@ -34,7 +34,11 @@ export interface SkailarOptions {
    * The format is **not** validated locally — only emptiness is checked. A
    * malformed or wrong-provider key (e.g. an OpenAI `sk-...` key passed by
    * mistake) is accepted here and rejected at the first request with a
-   * {@link SkailarAuthError} (HTTP 401).
+   * {@link SkailarAuthError} (HTTP 401). Note this means such a key is **sent to
+   * {@link SkailarOptions.baseURL}** before it is rejected; if you point
+   * `baseURL` at a third-party host, take care not to forward a credential meant
+   * for a different provider. Keep the default `baseURL` unless you control the
+   * endpoint.
    */
   apiKey?: string;
   /**
@@ -132,6 +136,27 @@ interface InternalRequest {
    * always retryable regardless, since it is rejected before execution.
    */
   idempotent?: boolean;
+}
+
+/**
+ * Upper bound on how long a single automatic retry will wait, in milliseconds.
+ * Caps a server `Retry-After`: even if the gateway (or a misbehaving proxy) asks
+ * for a much longer delay, the SDK waits at most this long before retrying, so a
+ * call cannot be parked for minutes or hours. The true server-requested value is
+ * still exposed on {@link SkailarRateLimitError.retryAfter}.
+ */
+export const MAX_RETRY_DELAY_MS = 60_000;
+
+/**
+ * Convert a server `Retry-After` value (in seconds) into a bounded retry delay in
+ * milliseconds, capped at {@link MAX_RETRY_DELAY_MS}.
+ *
+ * @param retryAfterSeconds - The seconds requested by the server, or `undefined`.
+ * @returns The capped delay in ms, or `undefined` when no value was given.
+ */
+export function capRetryDelay(retryAfterSeconds: number | undefined): number | undefined {
+  if (retryAfterSeconds === undefined) return undefined;
+  return Math.min(Math.max(0, retryAfterSeconds) * 1000, MAX_RETRY_DELAY_MS);
 }
 
 /**
@@ -361,8 +386,9 @@ export class Skailar {
    * Applies, per attempt: header assembly with bearer auth, a timeout-derived
    * {@link AbortSignal} composed with any caller signal, execution of
    * {@link SkailarOptions.fetch}, and error mapping. Backs off with full-jitter
-   * exponential delay, honoring a server `Retry-After` when present, up to
-   * {@link Skailar.maxRetries}. Non-429 4xx responses fail fast.
+   * exponential delay, honoring a server `Retry-After` when present (capped at
+   * {@link MAX_RETRY_DELAY_MS} so an oversized value cannot stall the call), up
+   * to {@link Skailar.maxRetries}. Non-429 4xx responses fail fast.
    *
    * Retries are scoped to avoid duplicating side effects: an HTTP `429` is always
    * retryable (rejected before execution), while a `5xx`, timeout or connection
@@ -440,8 +466,8 @@ export class Skailar {
         detachExternal();
         const apiError = await this.toApiError(response);
         const retryAfterMs =
-          apiError instanceof SkailarRateLimitError && apiError.retryAfter !== undefined
-            ? apiError.retryAfter * 1000
+          apiError instanceof SkailarRateLimitError
+            ? capRetryDelay(apiError.retryAfter)
             : undefined;
         if (this.isRetryableStatus(response.status, idempotent) && this.shouldRetry(attempt)) {
           attempt += 1;

@@ -12,6 +12,7 @@ import Skailar, {
   SkailarRateLimitError,
   SkailarUpstreamError,
 } from "../src/index";
+import { capRetryDelay, MAX_RETRY_DELAY_MS } from "../src/client";
 import { sendJson, startMockServer, type MockServer } from "./helpers/mock-server";
 import type { ServerResponse } from "node:http";
 
@@ -176,6 +177,29 @@ describe("retry behavior", () => {
     // 1900ms. So crossing ~2s proves the header value drove the wait.
     expect(elapsed).toBeGreaterThanOrEqual(1900);
     expect(elapsed).toBeLessThan(3500);
+  });
+
+  it("exposes the true server Retry-After on the error even when large", async () => {
+    server = await startMockServer((_req, res) => {
+      sendJson(res, 429, { error: "rate_limited", message: "wait" }, { "retry-after": "3600" });
+    });
+
+    // maxRetries: 0 so it throws without waiting; the error must report the real value.
+    const err = await call(client(0)).catch((e) => e);
+    expect(err).toBeInstanceOf(SkailarRateLimitError);
+    expect((err as SkailarRateLimitError).retryAfter).toBe(3600);
+  });
+
+  it("caps the retry delay so an oversized Retry-After cannot stall the call", () => {
+    // A 1-hour Retry-After is clamped to the 60s ceiling.
+    expect(capRetryDelay(3600)).toBe(MAX_RETRY_DELAY_MS);
+    expect(capRetryDelay(3600)).toBeLessThan(3600 * 1000);
+    // Values under the cap pass through unchanged (seconds → ms).
+    expect(capRetryDelay(5)).toBe(5000);
+    expect(capRetryDelay(0)).toBe(0);
+    // Negative or absent values are handled defensively.
+    expect(capRetryDelay(-10)).toBe(0);
+    expect(capRetryDelay(undefined)).toBeUndefined();
   });
 
   it("does NOT retry a non-429 4xx", async () => {
