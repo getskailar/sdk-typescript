@@ -69,9 +69,10 @@ export interface SkailarOptions {
    */
   maxRetries?: number;
   /**
-   * Custom `fetch` implementation, primarily for testing (default global
-   * `fetch`). No binding is applied; pass an already-bound function if your
-   * implementation requires a specific receiver.
+   * Custom `fetch` implementation, primarily for testing. Defaults to the global
+   * `fetch`, bound to `globalThis` so it works in browsers (which reject a
+   * `fetch` invoked with the wrong receiver). A value supplied here is used
+   * as-is — bind it yourself if your implementation needs a specific receiver.
    */
   fetch?: typeof fetch;
   /**
@@ -326,7 +327,8 @@ export class Skailar {
     this.timeout = options.timeout ?? 60_000;
     this.maxRetries = options.maxRetries ?? 2;
     this.defaultHeaders = options.defaultHeaders ?? {};
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+
+    this.fetchImpl = options.fetch ?? globalThis.fetch?.bind(globalThis);
 
     if (typeof this.fetchImpl !== "function") {
       throw new Error("No fetch implementation available; pass { fetch } explicitly.");
