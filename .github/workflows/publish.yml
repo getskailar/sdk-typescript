@@ -35,7 +35,7 @@ jobs:
       # npm performs the publish so provenance attestation is emitted and OIDC
       # Trusted Publishing is used (no NPM_TOKEN secret required).
       - name: Set up Node for npm publish
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           registry-url: "https://registry.npmjs.org"
