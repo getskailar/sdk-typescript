@@ -22,7 +22,7 @@
 import { Skailar } from "./client";
 
 export { Skailar };
-export type { SkailarOptions } from "./client";
+export type { SkailarOptions, RequestOptions } from "./client";
 
 export default Skailar;
 

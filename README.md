@@ -131,6 +131,38 @@ const client = new Skailar({
 API keys have the form `skl_live_<43 url-safe base64 chars>` and are sent as
 `Authorization: Bearer <key>`.
 
+### Per-call options (cancellation, timeout, headers)
+
+Every resource method accepts an optional trailing `RequestOptions` argument
+(the same shape as `openai-node`), keeping the request body separate from
+transport concerns:
+
+```ts
+const ac = new AbortController();
+
+const completion = await client.chat.completions.create(
+  { model: "gpt-5", messages: [{ role: "user", content: "hi" }] },
+  { signal: ac.signal, timeout: 10_000, headers: { "x-trace-id": "abc" } },
+);
+// ac.abort() cancels the in-flight request (works for non-streaming calls too).
+
+await client.models.list({ signal: ac.signal });
+await client.images.generate({ model: "gpt-image-1", prompt: "a fox" }, { signal: ac.signal });
+await client.audio.speech.create({ input: "hi" }, { signal: ac.signal });
+await client.ping({ timeout: 2_000 });
+```
+
+`RequestOptions` fields — all optional, all per-call overrides:
+
+- `signal` — an `AbortSignal`; aborting rejects the call (and, for streaming or
+  audio bodies, stops the transfer mid-flight).
+- `timeout` — overrides the client `timeout` for this request only.
+- `headers` — merged into the request, overriding client `defaultHeaders` (but
+  not the SDK's own `Authorization`).
+
+Streaming requests can also be cancelled via the returned stream's
+`.controller`.
+
 ## API reference
 
 ### `client.chat.completions.create(params)`
@@ -176,21 +208,19 @@ const { text } = await client.audio.transcriptions.create({
 });
 ```
 
-### `client.audio.speech.create(params)`
+### `client.audio.speech.create(params, options?)`
 
 Synthesize speech. Returns a `ReadableStream<Uint8Array>` of `audio/mpeg`. Pass
-an `AbortSignal` to cancel: aborting before the response arrives rejects the
-call, and aborting while the audio is still downloading tears down the
-connection so the stream stops mid-flight. (`transcriptions.create` accepts the
-same `signal`.)
+an `AbortSignal` via the options argument to cancel: aborting before the response
+arrives rejects the call, and aborting while the audio is still downloading tears
+down the connection so the stream stops mid-flight.
 
 ```ts
 const ac = new AbortController();
-const audio = await client.audio.speech.create({
-  input: "Hello!",
-  voice: "nova",
-  signal: ac.signal,
-});
+const audio = await client.audio.speech.create(
+  { input: "Hello!", voice: "nova" },
+  { signal: ac.signal },
+);
 // pipe `audio` to a file or an HTTP response; call ac.abort() to cancel.
 ```
 

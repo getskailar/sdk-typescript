@@ -62,8 +62,31 @@ export interface SkailarOptions {
   defaultHeaders?: Record<string, string>;
 }
 
+/**
+ * Per-call request options accepted as the trailing argument of every resource
+ * method (e.g. `chat.completions.create(body, options)`). Mirrors the
+ * `openai-node` convention so the wire body stays separate from transport
+ * concerns. Every field is optional and overrides the client-level default for
+ * this one call.
+ */
+export interface RequestOptions {
+  /**
+   * Signal to cancel this call. Aborting before the response arrives rejects the
+   * call with a {@link SkailarConnectionError}; for streaming/audio bodies,
+   * aborting mid-transfer tears down the connection.
+   */
+  signal?: AbortSignal;
+  /**
+   * Per-call timeout in milliseconds, overriding {@link SkailarOptions.timeout}
+   * for this request only.
+   */
+  timeout?: number;
+  /** Extra headers merged into this request, overriding client defaults. */
+  headers?: Record<string, string>;
+}
+
 /** Internal description of a single HTTP request to dispatch. */
-interface RequestOptions {
+interface InternalRequest {
   method: "GET" | "POST";
   /** Path beginning with `/v1/...`, relative to {@link SkailarOptions.baseURL}. */
   path: string;
@@ -78,6 +101,8 @@ interface RequestOptions {
    * the caller-visible {@link ChatCompletionStream.controller} drives cancellation.
    */
   signal?: AbortSignal;
+  /** Per-call timeout override in ms; falls back to {@link Skailar.timeout}. */
+  timeout?: number;
 }
 
 /**
@@ -261,14 +286,18 @@ export class Skailar {
   /**
    * Verify the configured API key against `GET /v1/ping-key`.
    *
+   * @param options - Optional per-call signal, timeout and headers.
    * @returns The `{ status, user_id }` payload when the key is valid.
    * @throws {@link SkailarAuthError} If the key is missing, invalid or revoked.
    */
-  ping(): Promise<PingKeyResponse> {
+  ping(options?: RequestOptions): Promise<PingKeyResponse> {
     return this.request<PingKeyResponse>({
       method: "GET",
       path: "/v1/ping-key",
       expect: "json",
+      signal: options?.signal,
+      timeout: options?.timeout,
+      headers: options?.headers,
     });
   }
 
@@ -279,21 +308,21 @@ export class Skailar {
    * @param options - The request description.
    * @returns The parsed JSON response body typed as `T`.
    */
-  request<T>(options: RequestOptions & { expect: "json" }): Promise<T>;
+  request<T>(options: InternalRequest & { expect: "json" }): Promise<T>;
   /**
    * Dispatch a request expecting the raw {@link Response}, with retries.
    *
    * @param options - The request description.
    * @returns The successful `Response`, body unread (e.g. for audio streams).
    */
-  request(options: RequestOptions & { expect: "response" }): Promise<Response>;
+  request(options: InternalRequest & { expect: "response" }): Promise<Response>;
   /**
    * Dispatch a streaming request, returning a chat completion stream.
    *
    * @param options - The request description with `expect: "stream"`.
    * @returns A {@link ChatCompletionStream} over the SSE response.
    */
-  request(options: RequestOptions & { expect: "stream" }): Promise<ChatCompletionStream>;
+  request(options: InternalRequest & { expect: "stream" }): Promise<ChatCompletionStream>;
   /**
    * Core dispatch implementation shared by all resources.
    *
@@ -314,10 +343,11 @@ export class Skailar {
    * depending on `options.expect`.
    */
   async request(
-    options: RequestOptions,
+    options: InternalRequest,
   ): Promise<unknown> {
     const url = `${this.baseURL}${options.path}`;
     const isStream = options.expect === "stream";
+    const timeoutMs = options.timeout ?? this.timeout;
     let attempt = 0;
 
     while (true) {
@@ -333,7 +363,7 @@ export class Skailar {
       const timer = setTimeout(() => {
         timedOut = true;
         controller.abort(new Error("Request timed out"));
-      }, this.timeout);
+      }, timeoutMs);
 
       let response: Response;
       try {
@@ -351,7 +381,7 @@ export class Skailar {
           message: externallyAborted
             ? "Request aborted"
             : timedOut
-              ? `Request timed out after ${this.timeout}ms`
+              ? `Request timed out after ${timeoutMs}ms`
               : "Network request to the Skailar API failed",
           cause: err,
         });
@@ -406,7 +436,7 @@ export class Skailar {
    * @param options - The request description.
    * @returns The header record to send.
    */
-  private buildHeaders(options: RequestOptions): Record<string, string> {
+  private buildHeaders(options: InternalRequest): Record<string, string> {
     const headers: Record<string, string> = {
       ...this.defaultHeaders,
       Authorization: `Bearer ${this.apiKey}`,

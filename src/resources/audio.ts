@@ -5,7 +5,7 @@
  * @packageDocumentation
  */
 
-import type { Skailar } from "../client";
+import type { RequestOptions, Skailar } from "../client";
 import { SkailarConnectionError } from "../errors";
 import { toBase64 } from "../internal/binary";
 import type {
@@ -33,9 +33,13 @@ export class AudioTranscriptions {
    * @param params - The audio and its MIME type; see {@link TranscriptionCreateParams}.
    * `file` may be a {@link Uint8Array}, {@link ArrayBuffer}, {@link Blob} or a
    * pre-encoded base64 string.
+   * @param options - Optional per-call signal, timeout and headers.
    * @returns A promise resolving to the {@link TranscriptionResponse}.
    */
-  async create(params: TranscriptionCreateParams): Promise<TranscriptionResponse> {
+  async create(
+    params: TranscriptionCreateParams,
+    options?: RequestOptions,
+  ): Promise<TranscriptionResponse> {
     const base64 = await toBase64(params.file);
     const mime =
       params.mime ??
@@ -47,7 +51,9 @@ export class AudioTranscriptions {
       path: "/v1/audio/transcriptions",
       body: { base64, mime },
       expect: "json",
-      signal: params.signal,
+      signal: options?.signal,
+      timeout: options?.timeout,
+      headers: options?.headers,
     });
   }
 }
@@ -67,25 +73,30 @@ export class AudioSpeech {
    * endpoints, this returns the response body stream directly so large audio
    * payloads need not be buffered in memory.
    *
-   * Pass `params.signal` to cancel the request: aborting it before the response
+   * Pass `options.signal` to cancel the request: aborting it before the response
    * arrives rejects this call, and aborting it while the MP3 is still downloading
    * tears down the underlying connection so the body stops mid-stream.
    *
-   * @param params - The text, voice and optional abort signal; see {@link SpeechCreateParams}.
+   * @param params - The text and voice; see {@link SpeechCreateParams}.
+   * @param options - Optional per-call signal, timeout and headers.
    * @returns A promise resolving to a `ReadableStream<Uint8Array>` of
    * `audio/mpeg` bytes, suitable for piping to a file, an HTTP response, or an
    * audio element.
    * @throws {@link SkailarConnectionError} If the response unexpectedly lacks a body.
    * @throws {@link SkailarBadRequestError} On HTTP 400 (e.g. text exceeding 4000 chars).
    */
-  async create(params: SpeechCreateParams): Promise<ReadableStream<Uint8Array>> {
+  async create(
+    params: SpeechCreateParams,
+    options?: RequestOptions,
+  ): Promise<ReadableStream<Uint8Array>> {
     const response = await this.client.request({
       method: "POST",
       path: "/v1/audio/speech",
       body: { input: params.input, voice: params.voice },
-      headers: { Accept: "audio/mpeg" },
+      headers: { Accept: "audio/mpeg", ...options?.headers },
       expect: "response",
-      signal: params.signal,
+      signal: options?.signal,
+      timeout: options?.timeout,
     });
     if (!response.body) {
       throw new SkailarConnectionError({ message: "Speech response had no audio body" });

@@ -100,7 +100,7 @@ describe("audio.speech.create cancellation", () => {
     });
 
     const ac = new AbortController();
-    const promise = client().audio.speech.create({ input: "hello", signal: ac.signal });
+    const promise = client().audio.speech.create({ input: "hello" }, { signal: ac.signal });
     ac.abort();
 
     await expect(promise).rejects.toBeInstanceOf(SkailarConnectionError);
@@ -120,7 +120,7 @@ describe("audio.speech.create cancellation", () => {
     });
 
     const ac = new AbortController();
-    const stream = await client().audio.speech.create({ input: "long", signal: ac.signal });
+    const stream = await client().audio.speech.create({ input: "long" }, { signal: ac.signal });
 
     const reader = stream.getReader();
     const first = await reader.read();
@@ -147,7 +147,7 @@ describe("audio.speech.create cancellation", () => {
     const ac = new AbortController();
     const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
 
-    const stream = await client().audio.speech.create({ input: "short", signal: ac.signal });
+    const stream = await client().audio.speech.create({ input: "short" }, { signal: ac.signal });
     const bytes = await drain(stream);
 
     expect(bytes).toBe(2048);
@@ -165,11 +165,10 @@ describe("audio.speech.create cancellation", () => {
     });
 
     const ac = new AbortController();
-    const promise = client().audio.transcriptions.create({
-      file: new Uint8Array([0, 1, 2]),
-      mime: "audio/wav",
-      signal: ac.signal,
-    });
+    const promise = client().audio.transcriptions.create(
+      { file: new Uint8Array([0, 1, 2]), mime: "audio/wav" },
+      { signal: ac.signal },
+    );
     ac.abort();
 
     await expect(promise).rejects.toBeInstanceOf(SkailarConnectionError);
@@ -196,11 +195,10 @@ describe("abort listener cleanup across retries", () => {
     const ac = new AbortController();
     const netListeners = countAbortListeners(ac.signal);
 
-    const res = await c.audio.transcriptions.create({
-      file: new Uint8Array([1, 2, 3]),
-      mime: "audio/wav",
-      signal: ac.signal,
-    });
+    const res = await c.audio.transcriptions.create(
+      { file: new Uint8Array([1, 2, 3]), mime: "audio/wav" },
+      { signal: ac.signal },
+    );
 
     expect(res).toBeDefined();
     expect(server.attempts()).toBe(3);
@@ -218,11 +216,10 @@ describe("abort listener cleanup across retries", () => {
     const ac = new AbortController();
     const netListeners = countAbortListeners(ac.signal);
 
-    await c.audio.transcriptions.create({
-      file: new Uint8Array([9]),
-      mime: "audio/wav",
-      signal: ac.signal,
-    });
+    await c.audio.transcriptions.create(
+      { file: new Uint8Array([9]) },
+      { signal: ac.signal },
+    );
 
     expect(netListeners()).toBe(0);
     ac.abort();

@@ -208,7 +208,10 @@ describe("timeout", () => {
 
     const ac = new AbortController();
     const promise = client(0, 5_000)
-      .audio.transcriptions.create({ file: new Uint8Array([1]), mime: "audio/wav", signal: ac.signal })
+      .audio.transcriptions.create(
+        { file: new Uint8Array([1]), mime: "audio/wav" },
+        { signal: ac.signal },
+      )
       .catch((e) => e);
     ac.abort();
 
