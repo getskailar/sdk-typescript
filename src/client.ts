@@ -29,6 +29,12 @@ export interface SkailarOptions {
   /**
    * Skailar API key of the form `skl_live_<43 url-safe base64 chars>`. Defaults
    * to `process.env.SKAILAR_API_KEY`; if neither is provided the constructor throws.
+   *
+   * @remarks
+   * The format is **not** validated locally — only emptiness is checked. A
+   * malformed or wrong-provider key (e.g. an OpenAI `sk-...` key passed by
+   * mistake) is accepted here and rejected at the first request with a
+   * {@link SkailarAuthError} (HTTP 401).
    */
   apiKey?: string;
   /**
@@ -253,7 +259,9 @@ export class Skailar {
 
   /**
    * @param options - Client configuration; see {@link SkailarOptions}.
-   * @throws If no API key is provided and `SKAILAR_API_KEY` is unset.
+   * @throws If no API key is resolvable (neither `options.apiKey` nor
+   * `SKAILAR_API_KEY`). A key that is present but malformed is **not** rejected
+   * here; it fails at the first request with a {@link SkailarAuthError}.
    */
   constructor(options: SkailarOptions = {}) {
     const env =
