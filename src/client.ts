@@ -109,6 +109,15 @@ interface InternalRequest {
   signal?: AbortSignal;
   /** Per-call timeout override in ms; falls back to {@link Skailar.timeout}. */
   timeout?: number;
+  /**
+   * Whether the request is safe to replay after a 5xx, timeout or connection
+   * failure — i.e. the server either did not execute it or executing it twice is
+   * harmless. `GET`s and text completions are idempotent; operations with billed
+   * side effects (image generation, speech, transcription, uploads) are not, and
+   * must not be retried once the request may have reached the server. A `429` is
+   * always retryable regardless, since it is rejected before execution.
+   */
+  idempotent?: boolean;
 }
 
 /**
@@ -303,6 +312,7 @@ export class Skailar {
       method: "GET",
       path: "/v1/ping-key",
       expect: "json",
+      idempotent: true,
       signal: options?.signal,
       timeout: options?.timeout,
       headers: options?.headers,
@@ -336,15 +346,21 @@ export class Skailar {
    *
    * Applies, per attempt: header assembly with bearer auth, a timeout-derived
    * {@link AbortSignal} composed with any caller signal, execution of
-   * {@link SkailarOptions.fetch}, and error mapping. Retries HTTP 429, HTTP 5xx
-   * and transient connection failures up to {@link Skailar.maxRetries}, backing
-   * off with full-jitter exponential delay and honoring a server `Retry-After`
-   * when present. Non-429 4xx responses fail fast.
+   * {@link SkailarOptions.fetch}, and error mapping. Backs off with full-jitter
+   * exponential delay, honoring a server `Retry-After` when present, up to
+   * {@link Skailar.maxRetries}. Non-429 4xx responses fail fast.
+   *
+   * Retries are scoped to avoid duplicating side effects: an HTTP `429` is always
+   * retryable (rejected before execution), while a `5xx`, timeout or connection
+   * failure is retried **only** when `options.idempotent` is set — because the
+   * request may already have executed server-side. Requests with billed side
+   * effects (image generation, speech, transcription, uploads) leave it unset and
+   * are therefore never replayed once they may have reached the gateway.
    *
    * Transport failures are reported as {@link SkailarConnectionError} with a
    * message distinguishing three causes: an external `signal` abort
-   * (non-retryable), an internal timeout once {@link Skailar.timeout} elapses
-   * (retryable), and a generic network failure (retryable).
+   * (non-retryable), an internal timeout once {@link Skailar.timeout} elapses,
+   * and a generic network failure.
    *
    * @param options - The request description.
    * @returns The parsed JSON, raw `Response`, or {@link ChatCompletionStream}
@@ -356,6 +372,9 @@ export class Skailar {
     const url = `${this.baseURL}${options.path}`;
     const isStream = options.expect === "stream";
     const timeoutMs = options.timeout ?? this.timeout;
+    // Default to non-idempotent: never replay a request with possible side
+    // effects unless the caller explicitly marked it safe.
+    const idempotent = options.idempotent ?? false;
     let attempt = 0;
 
     while (true) {
@@ -393,7 +412,9 @@ export class Skailar {
               : "Network request to the Skailar API failed",
           cause: err,
         });
-        if (externallyAborted || !this.shouldRetry(attempt)) throw connErr;
+        // A connection failure/timeout may have reached the server mid-request,
+        // so only replay it when the request is idempotent.
+        if (externallyAborted || !idempotent || !this.shouldRetry(attempt)) throw connErr;
         attempt += 1;
         await delay(this.backoff(attempt), options.signal);
         continue;
@@ -408,7 +429,7 @@ export class Skailar {
           apiError instanceof SkailarRateLimitError && apiError.retryAfter !== undefined
             ? apiError.retryAfter * 1000
             : undefined;
-        if (this.isRetryableStatus(response.status) && this.shouldRetry(attempt)) {
+        if (this.isRetryableStatus(response.status, idempotent) && this.shouldRetry(attempt)) {
           attempt += 1;
           await delay(retryAfterMs ?? this.backoff(attempt), options.signal);
           continue;
@@ -480,13 +501,20 @@ export class Skailar {
   }
 
   /**
-   * Whether a status code is eligible for automatic retry (429 and any 5xx).
+   * Whether an HTTP error status is eligible for automatic retry.
+   *
+   * A `429` is always retryable: the gateway rejects it before executing the
+   * request, so replaying it cannot duplicate side effects. A `5xx` may mean the
+   * request already executed server-side, so it is retried only when the caller
+   * marked the request idempotent.
    *
    * @param status - The HTTP status code.
+   * @param idempotent - Whether replaying the request is safe.
    * @returns `true` if retryable.
    */
-  private isRetryableStatus(status: number): boolean {
-    return status === 429 || status >= 500;
+  private isRetryableStatus(status: number, idempotent: boolean): boolean {
+    if (status === 429) return true;
+    return status >= 500 && idempotent;
   }
 
   /**

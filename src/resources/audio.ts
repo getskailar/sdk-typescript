@@ -51,6 +51,8 @@ export class AudioTranscriptions {
       path: "/v1/audio/transcriptions",
       body: { base64, mime },
       expect: "json",
+      // Billed transcription: never replay on 5xx/timeout to avoid double charges.
+      idempotent: false,
       signal: options?.signal,
       timeout: options?.timeout,
       headers: options?.headers,
@@ -95,6 +97,8 @@ export class AudioSpeech {
       body: { input: params.input, voice: params.voice },
       headers: { Accept: "audio/mpeg", ...options?.headers },
       expect: "response",
+      // Billed speech synthesis: never replay on 5xx/timeout to avoid double charges.
+      idempotent: false,
       signal: options?.signal,
       timeout: options?.timeout,
     });

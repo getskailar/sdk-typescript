@@ -40,6 +40,8 @@ export class ImagesResource {
       path: "/v1/images/generations",
       body,
       expect: "json",
+      // Billed image generation: never replay on 5xx/timeout to avoid double charges.
+      idempotent: false,
       signal: options?.signal,
       timeout: options?.timeout,
       headers: options?.headers,

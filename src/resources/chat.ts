@@ -91,6 +91,8 @@ export class ChatCompletions {
         path: "/v1/chat/completions",
         body,
         expect: "stream",
+        // Text generation is safe to replay before the stream starts.
+        idempotent: true,
         signal: options?.signal,
         timeout: options?.timeout,
         headers: options?.headers,
@@ -101,6 +103,8 @@ export class ChatCompletions {
       path: "/v1/chat/completions",
       body,
       expect: "json",
+      // Text generation is safe to replay.
+      idempotent: true,
       signal: options?.signal,
       timeout: options?.timeout,
       headers: options?.headers,

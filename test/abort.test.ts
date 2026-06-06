@@ -195,8 +195,9 @@ describe("abort listener cleanup across retries", () => {
     const ac = new AbortController();
     const netListeners = countAbortListeners(ac.signal);
 
-    const res = await c.audio.transcriptions.create(
-      { file: new Uint8Array([1, 2, 3]), mime: "audio/wav" },
+    // Use chat completions (idempotent → retried on 5xx) to drive the retry loop.
+    const res = await c.chat.completions.create(
+      { model: "m", messages: [{ role: "user", content: "x" }] },
       { signal: ac.signal },
     );
 

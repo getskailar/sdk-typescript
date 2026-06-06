@@ -40,6 +40,8 @@ export class ImageUploads {
       path: "/v1/uploads/images",
       body: { base64, content_type: params.contentType },
       expect: "json",
+      // Upload creates a stored asset: never replay to avoid duplicate uploads.
+      idempotent: false,
     });
   }
 }
@@ -68,6 +70,8 @@ export class FileUploads {
       path: "/v1/uploads/files",
       body: { base64, content_type: params.contentType },
       expect: "json",
+      // Upload creates a stored asset: never replay to avoid duplicate uploads.
+      idempotent: false,
     });
   }
 }
