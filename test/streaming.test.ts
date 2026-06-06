@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import Skailar, { SkailarAPIError } from "../src/index";
+import Skailar, { SkailarAPIError, ChatCompletionStream } from "../src/index";
 import { chunk, sendSSE, startMockServer, type MockServer } from "./helpers/mock-server";
 import type { ServerResponse } from "node:http";
 
@@ -152,5 +152,73 @@ describe("chat.completions.create (streaming)", () => {
     let text = "";
     for await (const c of stream) text += c.choices[0]?.delta?.content ?? "";
     expect(text).toBe("split-content");
+  });
+});
+
+describe("ChatCompletionStream reader cancellation", () => {
+  /**
+   * Build a `ReadableStream` of SSE bytes that records whether it was cancelled,
+   * and that keeps emitting chunks until cancelled.
+   *
+   * @returns The stream plus a getter reporting if `cancel` ran.
+   */
+  function infiniteSSEStream(): {
+    stream: ReadableStream<Uint8Array>;
+    wasCancelled: () => boolean;
+  } {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk("first"))}\n\n`));
+        let n = 0;
+        timer = setInterval(() => {
+          n += 1;
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk(`tick-${n}`))}\n\n`));
+          } catch {
+            if (timer) clearInterval(timer);
+          }
+        }, 5);
+      },
+      cancel() {
+        cancelled = true;
+        if (timer) clearInterval(timer);
+      },
+    });
+    return { stream, wasCancelled: () => cancelled };
+  }
+
+  it("cancels the underlying stream when the consumer breaks early", async () => {
+    const { stream, wasCancelled } = infiniteSSEStream();
+    const completion = new ChatCompletionStream(stream, new AbortController());
+
+    const received: string[] = [];
+    for await (const c of completion) {
+      received.push(c.choices[0]?.delta?.content ?? "");
+      if (received.length >= 2) break;
+    }
+
+    expect(received[0]).toBe("first");
+    expect(wasCancelled()).toBe(true);
+  });
+
+  it("cancels the underlying stream when aborted mid-iteration", async () => {
+    const { stream, wasCancelled } = infiniteSSEStream();
+    const controller = new AbortController();
+    const completion = new ChatCompletionStream(stream, controller);
+
+    await expect(
+      (async () => {
+        let count = 0;
+        for await (const _ of completion) {
+          count += 1;
+          if (count === 1) controller.abort();
+        }
+      })(),
+    ).rejects.toBeTruthy();
+
+    expect(wasCancelled()).toBe(true);
   });
 });

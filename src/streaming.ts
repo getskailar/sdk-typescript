@@ -19,6 +19,11 @@ import type { ChatCompletionChunk } from "./types/chat";
  * non-`data:` fields are ignored. Yielding stops at `[DONE]`; reaching
  * end-of-stream without `[DONE]` simply ends the generator.
  *
+ * On any exit — normal completion, `[DONE]`, an error, or the consumer
+ * abandoning the `for await` early — the reader is cancelled before its lock is
+ * released, so the underlying fetch connection is torn down instead of leaving
+ * bytes streaming from the network.
+ *
  * @param stream - The response body as a stream of UTF-8 encoded bytes.
  * @param signal - Optional abort signal; aborting rejects the iteration.
  * @returns An async generator yielding the raw string after each `data:` field.
@@ -67,6 +72,7 @@ export async function* parseSSE(
     if (err instanceof SkailarConnectionError) throw err;
     throw new SkailarConnectionError({ message: "Stream read failed", cause: err });
   } finally {
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
