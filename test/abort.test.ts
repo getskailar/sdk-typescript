@@ -6,8 +6,54 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Skailar, { SkailarConnectionError } from "../src/index";
-import { startMockServer, type MockServer } from "./helpers/mock-server";
+import { sendJson, startMockServer, type MockServer } from "./helpers/mock-server";
 import type { ServerResponse } from "node:http";
+
+/**
+ * Wrap an {@link AbortSignal} so calls to add/remove its `"abort"` listeners are
+ * counted, used to assert that retried requests do not leak listeners.
+ *
+ * @param signal - The signal to instrument (mutated in place).
+ * @returns A getter for the net listener count (added minus removed).
+ */
+function countAbortListeners(signal: AbortSignal): () => number {
+  let added = 0;
+  let removed = 0;
+  const origAdd = signal.addEventListener.bind(signal);
+  const origRemove = signal.removeEventListener.bind(signal);
+  Object.defineProperty(signal, "addEventListener", {
+    configurable: true,
+    value(type: string, ...rest: unknown[]) {
+      if (type === "abort") added += 1;
+      return (origAdd as (...a: unknown[]) => void)(type, ...rest);
+    },
+  });
+  Object.defineProperty(signal, "removeEventListener", {
+    configurable: true,
+    value(type: string, ...rest: unknown[]) {
+      if (type === "abort") removed += 1;
+      return (origRemove as (...a: unknown[]) => void)(type, ...rest);
+    },
+  });
+  return () => added - removed;
+}
+
+/**
+ * A minimal successful chat completion body for mock responses.
+ *
+ * @param content - The assistant message content.
+ * @returns A plain object matching the `chat.completion` wire shape.
+ */
+function completion(content: string): Record<string, unknown> {
+  return {
+    id: "chatcmpl-abort",
+    object: "chat.completion",
+    created: 1,
+    model: "m",
+    choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
+}
 
 let server: MockServer | undefined;
 
@@ -127,5 +173,58 @@ describe("audio.speech.create cancellation", () => {
     ac.abort();
 
     await expect(promise).rejects.toBeInstanceOf(SkailarConnectionError);
+  });
+});
+
+describe("abort listener cleanup across retries", () => {
+  it("does not leak listeners on the caller signal when a request is retried", async () => {
+    server = await startMockServer((_req, res, attempt) => {
+      if (attempt < 3) {
+        sendJson(res, 503, { error: "upstream_error", message: "retry me" });
+        return;
+      }
+      sendJson(res, 200, completion("done"));
+    });
+
+    const c = new Skailar({
+      apiKey: "skl_live_retry",
+      baseURL: server.url,
+      maxRetries: 3,
+      timeout: 5_000,
+    });
+
+    const ac = new AbortController();
+    const netListeners = countAbortListeners(ac.signal);
+
+    const res = await c.audio.transcriptions.create({
+      file: new Uint8Array([1, 2, 3]),
+      mime: "audio/wav",
+      signal: ac.signal,
+    });
+
+    expect(res).toBeDefined();
+    expect(server.attempts()).toBe(3);
+    expect(netListeners()).toBe(0);
+
+    ac.abort();
+  });
+
+  it("does not leak listeners after a non-streaming request completes", async () => {
+    server = await startMockServer((_req, res) => {
+      sendJson(res, 200, completion("ok"));
+    });
+
+    const c = new Skailar({ apiKey: "skl_live_clean", baseURL: server.url, maxRetries: 0 });
+    const ac = new AbortController();
+    const netListeners = countAbortListeners(ac.signal);
+
+    await c.audio.transcriptions.create({
+      file: new Uint8Array([9]),
+      mime: "audio/wav",
+      signal: ac.signal,
+    });
+
+    expect(netListeners()).toBe(0);
+    ac.abort();
   });
 });
