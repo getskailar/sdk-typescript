@@ -13,6 +13,13 @@
   ],
   "author": "Skailar",
   "homepage": "https://skailar.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getskailar/sdk-typescript.git"
+  },
+  "bugs": {
+    "url": "https://github.com/getskailar/sdk-typescript/issues"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
