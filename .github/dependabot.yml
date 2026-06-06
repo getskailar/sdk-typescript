@@ -1,3 +1,8 @@
+# Note: development uses Bun (bun.lock is the source of truth). A
+# package-lock.json is committed ALONGSIDE it solely so Dependabot — which
+# cannot parse bun.lock — can compute and open npm dependency updates. After
+# merging a Dependabot PR, run `bun install` to sync bun.lock, then regenerate
+# the npm lock with `npm install --package-lock-only`.
 version: 2
 updates:
   - package-ecosystem: npm
