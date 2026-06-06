@@ -8,8 +8,11 @@
 /**
  * Binary payload accepted by SDK methods that upload bytes. The SDK normalizes
  * any of these into the base64 string the gateway expects, so callers may pass
- * whichever representation they already hold. A `string` is assumed to be
- * pre-encoded base64 (no `data:` prefix).
+ * whichever representation they already hold.
+ *
+ * A `string` is treated as **already-encoded** base64 (no `data:` prefix) and is
+ * forwarded without validation — pass a `Uint8Array`/`ArrayBuffer`/`Blob` for
+ * raw bytes, since raw text passed as a string decodes to corrupt data server-side.
  */
 export type BinaryInput = Uint8Array | ArrayBuffer | Blob | string;
 

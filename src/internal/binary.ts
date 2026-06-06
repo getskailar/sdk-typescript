@@ -42,6 +42,13 @@ function bytesToBase64(bytes: Uint8Array): string {
  * `Uint8Array` are encoded directly. This lets the public API accept whichever
  * representation the caller already holds.
  *
+ * @remarks
+ * A `string` is taken literally as already-encoded base64 and is **not**
+ * validated. Passing raw text (e.g. `"hello world"`) is silently forwarded to
+ * the gateway, which will decode it as base64 and produce corrupt bytes or a
+ * `400`. Pass a {@link Uint8Array} / {@link ArrayBuffer} / {@link Blob} when you
+ * hold raw bytes; reserve the `string` form for values you have already encoded.
+ *
  * @param input - The payload as bytes, a buffer, a {@link Blob}, or a base64 string.
  * @returns A promise resolving to the base64 string.
  */
