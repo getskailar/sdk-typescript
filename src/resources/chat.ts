@@ -52,7 +52,19 @@ export class ChatCompletions {
    */
   create(body: StreamingRequest): Promise<ChatCompletionStream>;
   /**
-   * Implementation backing both overloads.
+   * Create a chat completion whose mode is chosen at runtime. Use this form when
+   * `stream` is a non-literal `boolean` (e.g. `stream: shouldStream`), where the
+   * concrete return type cannot be known at compile time; narrow the result with
+   * `instanceof ChatCompletionStream` or by checking the `stream` flag yourself.
+   *
+   * @param body - The request with a dynamic `stream` boolean.
+   * @returns Either a {@link ChatCompletion} or a {@link ChatCompletionStream}.
+   */
+  create(
+    body: ChatCompletionRequest & { stream?: boolean },
+  ): Promise<ChatCompletion | ChatCompletionStream>;
+  /**
+   * Implementation backing the public overloads.
    *
    * @param body - The chat completion request.
    * @returns Either a {@link ChatCompletion} or a {@link ChatCompletionStream}
