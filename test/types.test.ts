@@ -64,6 +64,42 @@ async function _typeProbe(client: Skailar): Promise<void> {
 }
 void _typeProbe;
 
+/**
+ * Guards that the public `client.request(...)` overloads resolve by `expect`, so
+ * the resource-internal call sites infer a precise return type rather than
+ * collapsing to `Promise<unknown>`. Never called; must compile.
+ */
+async function _requestOverloadProbe(client: Skailar): Promise<void> {
+  const stream = client.request({
+    method: "POST",
+    path: "/v1/chat/completions",
+    body: {},
+    expect: "stream",
+  });
+  expectType<Exact<typeof stream, Promise<ChatCompletionStream>>>();
+
+  const response = client.request({
+    method: "POST",
+    path: "/v1/audio/speech",
+    body: {},
+    headers: { Accept: "audio/mpeg" },
+    expect: "response",
+  });
+  expectType<Exact<typeof response, Promise<Response>>>();
+
+  const json = client.request<{ ok: boolean }>({
+    method: "GET",
+    path: "/v1/ping-key",
+    expect: "json",
+  });
+  expectType<Exact<typeof json, Promise<{ ok: boolean }>>>();
+
+  void stream;
+  void response;
+  void json;
+}
+void _requestOverloadProbe;
+
 describe("chat.completions.create overload dispatch", () => {
   it("returns a ChatCompletion for a non-streaming request", async () => {
     server = await startMockServer((_req, res) => {
