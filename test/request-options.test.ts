@@ -140,6 +140,57 @@ describe("per-call headers", () => {
   });
 });
 
+describe("Authorization cannot be overridden by caller headers", () => {
+  it("per-call headers cannot replace the bearer token", async () => {
+    server = await startMockServer((_req, res) => {
+      sendJson(res, 200, OK_COMPLETION);
+    });
+
+    await client().chat.completions.create(
+      { model: "m", messages: [{ role: "user", content: "x" }] },
+      { headers: { Authorization: "Bearer attacker-token", "x-keep": "yes" } },
+    );
+
+    const captured = server.requests[0];
+    // The SDK's real key wins; the injected token is dropped.
+    expect(captured?.headers["authorization"]).toBe("Bearer skl_live_opts");
+    expect(captured?.headers["authorization"]).not.toContain("attacker-token");
+    // Other caller headers are still honored.
+    expect(captured?.headers["x-keep"]).toBe("yes");
+  });
+
+  it("defaultHeaders cannot replace the bearer token", async () => {
+    server = await startMockServer((_req, res) => {
+      sendJson(res, 200, OK_COMPLETION);
+    });
+
+    const c = new Skailar({
+      apiKey: "skl_live_opts",
+      baseURL: server.url,
+      maxRetries: 0,
+      defaultHeaders: { Authorization: "Bearer wrong" },
+    });
+    await c.chat.completions.create({ model: "m", messages: [{ role: "user", content: "x" }] });
+
+    expect(server.requests[0]?.headers["authorization"]).toBe("Bearer skl_live_opts");
+  });
+
+  it("a lowercase 'authorization' header also cannot override it", async () => {
+    server = await startMockServer((_req, res) => {
+      sendJson(res, 200, OK_COMPLETION);
+    });
+
+    await client().chat.completions.create(
+      { model: "m", messages: [{ role: "user", content: "x" }] },
+      { headers: { authorization: "Bearer sneaky" } },
+    );
+
+    // Node lowercases header names; the SDK sets "Authorization" last, so the
+    // canonical bearer is what the server receives.
+    expect(server.requests[0]?.headers["authorization"]).toBe("Bearer skl_live_opts");
+  });
+});
+
 describe("audio.speech Accept header precedence", () => {
   /**
    * Drain one chunk from a stream so the request completes, then discard.

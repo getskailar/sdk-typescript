@@ -44,9 +44,18 @@ export interface SkailarOptions {
    */
   baseURL?: string;
   /**
-   * Per-request timeout in milliseconds (default `60000`). Applies to each
-   * attempt independently; a timed-out attempt becomes a
-   * {@link SkailarConnectionError} and is eligible for retry.
+   * Timeout in milliseconds applied to **each attempt** (default `60000`). A
+   * timed-out attempt becomes a {@link SkailarConnectionError} and, for
+   * idempotent requests, is eligible for retry.
+   *
+   * @remarks
+   * This is **per attempt, not a total deadline**. With retries enabled the
+   * worst-case wall-clock for one call is roughly
+   * `(maxRetries + 1) × timeout + backoff` — e.g. the defaults (60s, 2 retries)
+   * can keep a call pending for ~3 minutes on a persistently slow endpoint. In
+   * environments with their own hard limits (serverless/Lambda, HTTP handlers),
+   * enforce an end-to-end bound by passing an `AbortSignal` (and/or a smaller
+   * per-call `timeout`) in the request options, or set `maxRetries: 0`.
    */
   timeout?: number;
   /**
@@ -62,8 +71,9 @@ export interface SkailarOptions {
    */
   fetch?: typeof fetch;
   /**
-   * Headers merged into every request. The SDK's own `Authorization`,
-   * `Content-Type` and `Accept`, plus explicit per-call headers, take precedence.
+   * Headers merged into every request. Per-call `options.headers` override these.
+   * The SDK's `Authorization` always wins and cannot be overridden; `Accept` and
+   * `Content-Type` default to SDK values but may be overridden here or per call.
    */
   defaultHeaders?: Record<string, string>;
 }
@@ -87,7 +97,11 @@ export interface RequestOptions {
    * for this request only.
    */
   timeout?: number;
-  /** Extra headers merged into this request, overriding client defaults. */
+  /**
+   * Extra headers merged into this request, overriding client `defaultHeaders`.
+   * Cannot override `Authorization` (always set by the SDK); may override `Accept`
+   * and `Content-Type`.
+   */
   headers?: Record<string, string>;
 }
 
@@ -459,8 +473,14 @@ export class Skailar {
   }
 
   /**
-   * Assemble the outgoing header set for a request, applying defaults, auth,
-   * content-type and accept in precedence order.
+   * Assemble the outgoing header set for a request.
+   *
+   * Precedence (later wins): client `defaultHeaders` → the SDK's default `Accept`
+   * and `Content-Type` → per-call `options.headers` → `Authorization`.
+   * `Authorization` is applied **last** so a caller-supplied header (including a
+   * blindly proxied incoming one) can never override or drop the bearer token and
+   * leak it elsewhere. `Accept`/`Content-Type` remain overridable on purpose —
+   * e.g. audio speech sends `Accept: audio/mpeg`.
    *
    * @param options - The request description.
    * @returns The header record to send.
@@ -468,11 +488,17 @@ export class Skailar {
   private buildHeaders(options: InternalRequest): Record<string, string> {
     const headers: Record<string, string> = {
       ...this.defaultHeaders,
-      Authorization: `Bearer ${this.apiKey}`,
       Accept: options.expect === "stream" ? "text/event-stream" : "application/json",
     };
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     if (options.headers) Object.assign(headers, options.headers);
+    // Drop any caller-supplied authorization (any casing) so it cannot leak or
+    // be sent alongside ours; HTTP header names are case-insensitive but JS
+    // object keys are not, so a lowercase key would otherwise survive.
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === "authorization") delete headers[key];
+    }
+    headers["Authorization"] = `Bearer ${this.apiKey}`;
     return headers;
   }
 
