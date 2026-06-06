@@ -1,6 +1,6 @@
 {
   "name": "@skailar-ai/sdk",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Official TypeScript SDK for the Skailar API",
   "license": "MIT",
   "private": false,
