@@ -149,6 +149,35 @@ describe("retry behavior", () => {
     expect(server.attempts()).toBe(2);
   });
 
+  it("waits for the Retry-After duration before retrying a 429", async () => {
+    server = await startMockServer((_req, res, attempt) => {
+      if (attempt === 1) {
+        sendJson(res, 429, { error: "rate_limited", message: "wait" }, { "retry-after": "2" });
+        return;
+      }
+      sendJson(res, 200, {
+        id: "ok",
+        object: "chat.completion",
+        created: 1,
+        model: "m",
+        choices: [{ index: 0, message: { role: "assistant", content: "after-wait" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      });
+    });
+
+    const start = performance.now();
+    const res = await call(client(2));
+    const elapsed = performance.now() - start;
+
+    expect(res.choices[0]?.message.content).toBe("after-wait");
+    expect(server.attempts()).toBe(2);
+    // Retry-After: 2s must be honored, NOT the jittered backoff: backoff(1) is
+    // Math.random() * min(8000, 500 * 2^1) = [0, 1000)ms, which can never reach
+    // 1900ms. So crossing ~2s proves the header value drove the wait.
+    expect(elapsed).toBeGreaterThanOrEqual(1900);
+    expect(elapsed).toBeLessThan(3500);
+  });
+
   it("does NOT retry a non-429 4xx", async () => {
     server = await startMockServer((_req, res) => {
       sendJson(res, 400, { error: "bad_request", message: "fatal" });
