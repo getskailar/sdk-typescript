@@ -187,4 +187,34 @@ describe("timeout", () => {
     expect(err).toBeInstanceOf(SkailarConnectionError);
     expect(err.status).toBeNull();
   });
+
+  it("reports a timeout with a message distinct from an external abort", async () => {
+    server = await startMockServer((_req, res: ServerResponse) => {
+      setTimeout(() => sendJson(res, 200, { text: "late" }), 300);
+    });
+
+    const timeoutErr = await client(0, 40)
+      .audio.transcriptions.create({ file: new Uint8Array([1]), mime: "audio/wav" })
+      .catch((e) => e);
+    expect(timeoutErr).toBeInstanceOf(SkailarConnectionError);
+    expect(timeoutErr.message).toMatch(/timed out/i);
+    expect(timeoutErr.message).not.toMatch(/aborted/i);
+  });
+
+  it("reports an external abort with an 'aborted' message, not a timeout", async () => {
+    server = await startMockServer((_req, res: ServerResponse) => {
+      setTimeout(() => sendJson(res, 200, { text: "late" }), 300);
+    });
+
+    const ac = new AbortController();
+    const promise = client(0, 5_000)
+      .audio.transcriptions.create({ file: new Uint8Array([1]), mime: "audio/wav", signal: ac.signal })
+      .catch((e) => e);
+    ac.abort();
+
+    const err = await promise;
+    expect(err).toBeInstanceOf(SkailarConnectionError);
+    expect(err.message).toMatch(/aborted/i);
+    expect(err.message).not.toMatch(/timed out/i);
+  });
 });

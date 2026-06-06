@@ -300,9 +300,14 @@ export class Skailar {
    * Applies, per attempt: header assembly with bearer auth, a timeout-derived
    * {@link AbortSignal} composed with any caller signal, execution of
    * {@link SkailarOptions.fetch}, and error mapping. Retries HTTP 429, HTTP 5xx
-   * and {@link SkailarConnectionError} up to {@link Skailar.maxRetries}, backing
+   * and transient connection failures up to {@link Skailar.maxRetries}, backing
    * off with full-jitter exponential delay and honoring a server `Retry-After`
    * when present. Non-429 4xx responses fail fast.
+   *
+   * Transport failures are reported as {@link SkailarConnectionError} with a
+   * message distinguishing three causes: an external `signal` abort
+   * (non-retryable), an internal timeout once {@link Skailar.timeout} elapses
+   * (retryable), and a generic network failure (retryable).
    *
    * @param options - The request description.
    * @returns The parsed JSON, raw `Response`, or {@link ChatCompletionStream}
@@ -324,7 +329,11 @@ export class Skailar {
       }
       const detachExternal = () =>
         options.signal?.removeEventListener("abort", onExternalAbort);
-      const timer = setTimeout(() => controller.abort(new Error("Request timed out")), this.timeout);
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error("Request timed out"));
+      }, this.timeout);
 
       let response: Response;
       try {
@@ -337,13 +346,16 @@ export class Skailar {
       } catch (err) {
         clearTimeout(timer);
         detachExternal();
+        const externallyAborted = options.signal?.aborted ?? false;
         const connErr = new SkailarConnectionError({
-          message: options.signal?.aborted
+          message: externallyAborted
             ? "Request aborted"
-            : "Network request to the Skailar API failed",
+            : timedOut
+              ? `Request timed out after ${this.timeout}ms`
+              : "Network request to the Skailar API failed",
           cause: err,
         });
-        if (options.signal?.aborted || !this.shouldRetry(attempt)) throw connErr;
+        if (externallyAborted || !this.shouldRetry(attempt)) throw connErr;
         attempt += 1;
         await delay(this.backoff(attempt), options.signal);
         continue;
