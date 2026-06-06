@@ -139,3 +139,45 @@ describe("per-call headers", () => {
     expect(captured?.headers["authorization"]).toBe("Bearer skl_live_opts");
   });
 });
+
+describe("audio.speech Accept header precedence", () => {
+  /**
+   * Drain one chunk from a stream so the request completes, then discard.
+   *
+   * @param stream - The audio stream to read.
+   */
+  async function readOne(stream: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = stream.getReader();
+    await reader.read();
+    await reader.cancel().catch(() => {});
+  }
+
+  it("sends Accept: audio/mpeg, overriding the default application/json", async () => {
+    server = await startMockServer((_req, res: ServerResponse) => {
+      res.writeHead(200, { "content-type": "audio/mpeg" });
+      res.end(Buffer.from([0xff, 0xfb]));
+    });
+
+    const stream = await client().audio.speech.create({ input: "hi" });
+    await readOne(stream);
+
+    const captured = server.requests[0];
+    expect(captured?.headers["accept"]).toBe("audio/mpeg");
+    expect(captured?.headers["content-type"]).toContain("application/json");
+  });
+
+  it("lets a caller override Accept via options.headers", async () => {
+    server = await startMockServer((_req, res: ServerResponse) => {
+      res.writeHead(200, { "content-type": "audio/mpeg" });
+      res.end(Buffer.from([0xff, 0xfb]));
+    });
+
+    const stream = await client().audio.speech.create(
+      { input: "hi" },
+      { headers: { Accept: "audio/ogg" } },
+    );
+    await readOne(stream);
+
+    expect(server.requests[0]?.headers["accept"]).toBe("audio/ogg");
+  });
+});
