@@ -104,7 +104,15 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
-/** A function-calling tool definition, OpenAI-compatible. */
+/**
+ * A function-calling tool definition, OpenAI-compatible.
+ *
+ * @remarks
+ * Tools use the OpenAI shape (`type: "function"`, `function.parameters` as JSON
+ * Schema). The gateway translates this into each provider's native format —
+ * e.g. Anthropic's `input_schema` — so provider-native tool shapes are not
+ * exposed by the SDK in this version.
+ */
 export interface Tool {
   type: "function";
   function: {
