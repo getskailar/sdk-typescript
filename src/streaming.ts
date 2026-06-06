@@ -118,18 +118,18 @@ export class ChatCompletionStream implements AsyncIterable<ChatCompletionChunk> 
   }
 
   /**
-   * Decode the SSE stream into typed chunks.
+   * Decode the SSE byte stream into typed chunks.
    *
    * Each `data:` payload is `JSON.parse`d. If a payload carries an `error` field
    * (the gateway's in-band failure signal), iteration throws the corresponding
    * {@link SkailarAPIError} instead of yielding. Malformed JSON payloads are
    * skipped defensively.
    *
-   * @returns An async iterator over {@link ChatCompletionChunk} values.
+   * @returns An async generator over {@link ChatCompletionChunk} values.
    * @throws {@link SkailarAPIError} When the stream delivers an in-band error event.
    * @throws {@link SkailarConnectionError} When the stream is aborted or read fails.
    */
-  async *[Symbol.asyncIterator](): AsyncIterator<ChatCompletionChunk> {
+  private async *decode(): AsyncGenerator<ChatCompletionChunk, void, unknown> {
     for await (const data of parseSSE(this.body, this.controller.signal)) {
       let parsed: unknown;
       try {
@@ -150,5 +150,29 @@ export class ChatCompletionStream implements AsyncIterable<ChatCompletionChunk> 
 
       yield parsed as ChatCompletionChunk;
     }
+  }
+
+  /**
+   * Iterate the decoded chunks. Abandoning the iteration early (a `break` or
+   * `return` inside a `for await`) invokes the returned iterator's `return()`,
+   * which aborts {@link ChatCompletionStream.controller} so the underlying fetch
+   * request is cancelled — not merely the body reader — and then runs the
+   * generator's own cleanup ({@link parseSSE}'s `finally`: reader cancel +
+   * lock release). Normal completion and thrown errors are unaffected.
+   *
+   * @returns An async iterator over {@link ChatCompletionChunk} values.
+   */
+  [Symbol.asyncIterator](): AsyncIterator<ChatCompletionChunk> {
+    const inner = this.decode();
+    const controller = this.controller;
+    return {
+      next: () => inner.next(),
+      async return(value?: unknown): Promise<IteratorResult<ChatCompletionChunk>> {
+        controller.abort();
+        if (inner.return) await inner.return(value as undefined);
+        return { done: true, value: undefined };
+      },
+      throw: (err) => (inner.throw ? inner.throw(err) : Promise.reject(err)),
+    };
   }
 }

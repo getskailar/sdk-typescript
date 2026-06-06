@@ -204,6 +204,47 @@ describe("ChatCompletionStream reader cancellation", () => {
     expect(wasCancelled()).toBe(true);
   });
 
+  it("aborts the controller when the consumer breaks early", async () => {
+    const { stream } = infiniteSSEStream();
+    const controller = new AbortController();
+    let abortFired = false;
+    controller.signal.addEventListener("abort", () => {
+      abortFired = true;
+    });
+    const completion = new ChatCompletionStream(stream, controller);
+
+    const received: string[] = [];
+    for await (const c of completion) {
+      received.push(c.choices[0]?.delta?.content ?? "");
+      if (received.length >= 1) break;
+    }
+
+    // break tears down the underlying fetch via controller.abort(), not just the
+    // body reader — so a long-lived request does not keep streaming in the background.
+    expect(abortFired).toBe(true);
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("does not abort the controller on normal completion", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk("only", "stop"))}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const controller = new AbortController();
+    const completion = new ChatCompletionStream(stream, controller);
+
+    let count = 0;
+    for await (const _ of completion) count += 1;
+
+    expect(count).toBe(1);
+    // Running the stream to its natural end must NOT abort the controller.
+    expect(controller.signal.aborted).toBe(false);
+  });
+
   it("cancels the underlying stream when aborted mid-iteration", async () => {
     const { stream, wasCancelled } = infiniteSSEStream();
     const controller = new AbortController();
