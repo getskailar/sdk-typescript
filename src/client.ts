@@ -123,6 +123,50 @@ function parseRetryAfter(header: string | null): number | undefined {
 }
 
 /**
+ * Wrap a byte stream so `onDone` runs exactly once when it terminates — whether
+ * it closes normally, errors, or is cancelled by the consumer. Used to detach
+ * the external-abort listener for `response`/`stream` results whose body outlives
+ * the {@link Skailar.request} call, so a long-lived caller `AbortSignal` does not
+ * accumulate listeners across requests.
+ *
+ * @param source - The original response body stream.
+ * @param onDone - Idempotent cleanup to run on terminal state.
+ * @returns A stream that mirrors `source` and triggers `onDone` when finished.
+ */
+function withCleanup(
+  source: ReadableStream<Uint8Array>,
+  onDone: () => void,
+): ReadableStream<Uint8Array> {
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    onDone();
+  };
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) {
+          finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        finish();
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      finish();
+      await reader.cancel(reason);
+    },
+  });
+}
+
+/**
  * Read the request-correlation id from a response's headers, checking the common
  * header spellings so the id is captured regardless of casing convention.
  *
@@ -276,8 +320,10 @@ export class Skailar {
       const onExternalAbort = () => controller.abort(options.signal?.reason);
       if (options.signal) {
         if (options.signal.aborted) controller.abort(options.signal.reason);
-        else options.signal.addEventListener("abort", onExternalAbort, { once: true });
+        else options.signal.addEventListener("abort", onExternalAbort);
       }
+      const detachExternal = () =>
+        options.signal?.removeEventListener("abort", onExternalAbort);
       const timer = setTimeout(() => controller.abort(new Error("Request timed out")), this.timeout);
 
       let response: Response;
@@ -290,7 +336,7 @@ export class Skailar {
         });
       } catch (err) {
         clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onExternalAbort);
+        detachExternal();
         const connErr = new SkailarConnectionError({
           message: options.signal?.aborted
             ? "Request aborted"
@@ -303,9 +349,10 @@ export class Skailar {
         continue;
       }
 
+      clearTimeout(timer);
+
       if (!response.ok) {
-        clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onExternalAbort);
+        detachExternal();
         const apiError = await this.toApiError(response);
         const retryAfterMs =
           apiError instanceof SkailarRateLimitError && apiError.retryAfter !== undefined
@@ -319,18 +366,23 @@ export class Skailar {
         throw apiError;
       }
 
-      if (isStream) {
-        clearTimeout(timer);
+      if (isStream || options.expect === "response") {
         if (!response.body) {
-          throw new SkailarConnectionError({ message: "Streaming response had no body" });
+          detachExternal();
+          throw new SkailarConnectionError({
+            message: isStream ? "Streaming response had no body" : "Response had no body",
+          });
         }
-        return new ChatCompletionStream(response.body, controller);
+        const body = withCleanup(response.body, detachExternal);
+        if (isStream) return new ChatCompletionStream(body, controller);
+        return new Response(body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
       }
 
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onExternalAbort);
-
-      if (options.expect === "response") return response;
+      detachExternal();
       return (await response.json()) as unknown;
     }
   }

@@ -47,6 +47,7 @@ export class AudioTranscriptions {
       path: "/v1/audio/transcriptions",
       body: { base64, mime },
       expect: "json",
+      signal: params.signal,
     });
   }
 }
@@ -66,7 +67,11 @@ export class AudioSpeech {
    * endpoints, this returns the response body stream directly so large audio
    * payloads need not be buffered in memory.
    *
-   * @param params - The text and voice; see {@link SpeechCreateParams}.
+   * Pass `params.signal` to cancel the request: aborting it before the response
+   * arrives rejects this call, and aborting it while the MP3 is still downloading
+   * tears down the underlying connection so the body stops mid-stream.
+   *
+   * @param params - The text, voice and optional abort signal; see {@link SpeechCreateParams}.
    * @returns A promise resolving to a `ReadableStream<Uint8Array>` of
    * `audio/mpeg` bytes, suitable for piping to a file, an HTTP response, or an
    * audio element.
@@ -80,6 +85,7 @@ export class AudioSpeech {
       body: { input: params.input, voice: params.voice },
       headers: { Accept: "audio/mpeg" },
       expect: "response",
+      signal: params.signal,
     });
     if (!response.body) {
       throw new SkailarConnectionError({ message: "Speech response had no audio body" });

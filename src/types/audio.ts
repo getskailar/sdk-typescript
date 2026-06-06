@@ -34,6 +34,8 @@ export interface TranscriptionCreateParams {
    * {@link Blob} with a `type`, that type is used when this is omitted.
    */
   mime?: TranscriptionMime;
+  /** Optional signal to cancel the request before or during the response. */
+  signal?: AbortSignal;
 }
 
 /** Wire request body for `POST /v1/audio/transcriptions`. */
@@ -68,6 +70,12 @@ export interface SpeechCreateParams {
   input: string;
   /** Voice to speak with (default `"nova"`). */
   voice?: SpeechVoice;
+  /**
+   * Optional signal to cancel the request. Aborting before the response arrives
+   * rejects the call; aborting mid-download tears down the connection so the
+   * returned audio stream stops.
+   */
+  signal?: AbortSignal;
 }
 
 /** Wire request body for `POST /v1/audio/speech`. */

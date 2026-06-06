@@ -178,11 +178,20 @@ const { text } = await client.audio.transcriptions.create({
 
 ### `client.audio.speech.create(params)`
 
-Synthesize speech. Returns a `ReadableStream<Uint8Array>` of `audio/mpeg`.
+Synthesize speech. Returns a `ReadableStream<Uint8Array>` of `audio/mpeg`. Pass
+an `AbortSignal` to cancel: aborting before the response arrives rejects the
+call, and aborting while the audio is still downloading tears down the
+connection so the stream stops mid-flight. (`transcriptions.create` accepts the
+same `signal`.)
 
 ```ts
-const audio = await client.audio.speech.create({ input: "Hello!", voice: "nova" });
-// pipe `audio` to a file or an HTTP response
+const ac = new AbortController();
+const audio = await client.audio.speech.create({
+  input: "Hello!",
+  voice: "nova",
+  signal: ac.signal,
+});
+// pipe `audio` to a file or an HTTP response; call ac.abort() to cancel.
 ```
 
 ### `client.uploads.images.create(params)` / `client.uploads.files.create(params)`
