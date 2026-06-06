@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import Skailar, { SkailarAPIError, ChatCompletionStream } from "../src/index";
+import Skailar, { SkailarAPIError, SkailarConnectionError, ChatCompletionStream } from "../src/index";
 import { chunk, sendSSE, startMockServer, type MockServer } from "./helpers/mock-server";
 import type { ServerResponse } from "node:http";
 
@@ -261,5 +261,71 @@ describe("ChatCompletionStream reader cancellation", () => {
     ).rejects.toBeTruthy();
 
     expect(wasCancelled()).toBe(true);
+  });
+});
+
+describe("SSE line terminators and malformed payloads", () => {
+  /**
+   * Build a one-shot byte stream from raw SSE text, optionally split into pieces
+   * delivered across separate reads.
+   *
+   * @param parts - One or more raw strings; each becomes a separate enqueue.
+   * @returns A `ReadableStream` emitting the parts then closing.
+   */
+  function streamOf(...parts: string[]): ReadableStream<Uint8Array> {
+    const enc = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const p of parts) controller.enqueue(enc.encode(p));
+        controller.close();
+      },
+    });
+  }
+
+  /**
+   * Render a chunk's JSON payload with the given content.
+   *
+   * @param content - The delta content.
+   * @returns The JSON string for one chunk.
+   */
+  function chunkJSON(content: string): string {
+    return JSON.stringify(chunk(content));
+  }
+
+  it("parses events terminated by lone \\r (legacy SSE)", async () => {
+    const body = `data: ${chunkJSON("A")}\rdata: ${chunkJSON("B")}\rdata: [DONE]\r`;
+    const stream = new ChatCompletionStream(streamOf(body), new AbortController());
+
+    let text = "";
+    for await (const c of stream) text += c.choices[0]?.delta?.content ?? "";
+    expect(text).toBe("AB");
+  });
+
+  it("handles \\r\\n split across two reads", async () => {
+    const stream = new ChatCompletionStream(
+      streamOf(`data: ${chunkJSON("X")}\r`, `\ndata: ${chunkJSON("Y")}\r\ndata: [DONE]\r\n`),
+      new AbortController(),
+    );
+
+    let text = "";
+    for await (const c of stream) text += c.choices[0]?.delta?.content ?? "";
+    expect(text).toBe("XY");
+  });
+
+  it("throws on a non-JSON data payload instead of truncating silently", async () => {
+    const body = `data: ${chunkJSON("partial")}\n\ndata: upstream proxy error: 502 Bad Gateway\n\n`;
+    const stream = new ChatCompletionStream(streamOf(body), new AbortController());
+
+    const received: string[] = [];
+    let caught: unknown;
+    try {
+      for await (const c of stream) received.push(c.choices[0]?.delta?.content ?? "");
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(received).toEqual(["partial"]);
+    expect(caught).toBeInstanceOf(SkailarConnectionError);
+    expect((caught as Error).message).toMatch(/malformed streaming event/i);
   });
 });

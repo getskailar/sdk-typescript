@@ -13,11 +13,11 @@ import type { ChatCompletionChunk } from "./types/chat";
  * arrival order, excluding the terminal `[DONE]` sentinel.
  *
  * Implements just the slice of the SSE grammar the gateway emits: UTF-8 `data:`
- * lines separated by `\n`, events delimited by blank lines, terminated by a
- * literal `data: [DONE]`. A partial line left in the buffer across reads is
- * preserved and completed by the next chunk. Comment lines (`:` prefix) and
- * non-`data:` fields are ignored. Yielding stops at `[DONE]`; reaching
- * end-of-stream without `[DONE]` simply ends the generator.
+ * lines terminated by any of `\n`, `\r\n` or `\r` (per the SSE spec), events
+ * delimited by blank lines, terminated by a literal `data: [DONE]`. A partial
+ * line left in the buffer across reads is preserved and completed by the next
+ * chunk. Comment lines (`:` prefix) and non-`data:` fields are ignored. Yielding
+ * stops at `[DONE]`; reaching end-of-stream without `[DONE]` simply ends the generator.
  *
  * On any exit — normal completion, `[DONE]`, an error, or the consumer
  * abandoning the `for await` early — the reader is cancelled before its lock is
@@ -37,6 +37,35 @@ export async function* parseSSE(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  /**
+   * Extract the next complete line from `buffer`, consuming its terminator.
+   * Recognizes `\n`, `\r\n` and a lone `\r` (the three SSE line terminators).
+   * Returns `null` when no terminated line is buffered yet — including the case
+   * of a trailing lone `\r` that might still be the start of a `\r\n` split
+   * across reads, which is left buffered until the next chunk resolves it.
+   *
+   * @returns The line without its terminator, or `null` if none is complete.
+   */
+  function nextLine(): string | null {
+    let i = -1;
+    for (let j = 0; j < buffer.length; j++) {
+      const c = buffer[j];
+      if (c === "\n" || c === "\r") {
+        i = j;
+        break;
+      }
+    }
+    if (i === -1) return null;
+    const line = buffer.slice(0, i);
+    if (buffer[i] === "\r") {
+      if (i === buffer.length - 1) return null; // maybe `\r\n` split across reads
+      buffer = buffer.slice(i + (buffer[i + 1] === "\n" ? 2 : 1));
+    } else {
+      buffer = buffer.slice(i + 1);
+    }
+    return line;
+  }
+
   try {
     while (true) {
       if (signal?.aborted) {
@@ -48,12 +77,8 @@ export async function* parseSSE(
 
       buffer += decoder.decode(value, { stream: true });
 
-      let newlineIndex: number;
-      while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
-        const rawLine = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-
+      let line: string | null;
+      while ((line = nextLine()) !== null) {
         if (line === "" || line.startsWith(":")) continue;
         if (!line.startsWith("data:")) continue;
 
@@ -63,7 +88,7 @@ export async function* parseSSE(
       }
     }
 
-    const tail = buffer.trim();
+    const tail = buffer.replace(/[\r\n]+$/, "");
     if (tail.startsWith("data:")) {
       const data = tail.slice(5).trimStart();
       if (data !== "[DONE]" && data !== "") yield data;
@@ -122,12 +147,15 @@ export class ChatCompletionStream implements AsyncIterable<ChatCompletionChunk> 
    *
    * Each `data:` payload is `JSON.parse`d. If a payload carries an `error` field
    * (the gateway's in-band failure signal), iteration throws the corresponding
-   * {@link SkailarAPIError} instead of yielding. Malformed JSON payloads are
-   * skipped defensively.
+   * {@link SkailarAPIError} instead of yielding. A payload that is not valid JSON
+   * (e.g. a plain-text error injected by an intermediary) throws a
+   * {@link SkailarConnectionError} rather than being dropped, so a malformed
+   * stream cannot truncate the response silently.
    *
    * @returns An async generator over {@link ChatCompletionChunk} values.
    * @throws {@link SkailarAPIError} When the stream delivers an in-band error event.
-   * @throws {@link SkailarConnectionError} When the stream is aborted or read fails.
+   * @throws {@link SkailarConnectionError} When a payload is malformed, or the
+   * stream is aborted or fails to read.
    */
   private async *decode(): AsyncGenerator<ChatCompletionChunk, void, unknown> {
     for await (const data of parseSSE(this.body, this.controller.signal)) {
@@ -135,7 +163,11 @@ export class ChatCompletionStream implements AsyncIterable<ChatCompletionChunk> 
       try {
         parsed = JSON.parse(data);
       } catch {
-        continue;
+        // A non-JSON data payload (e.g. plain-text error from an intermediary) is
+        // surfaced, not dropped, so a malformed stream cannot truncate silently.
+        throw new SkailarConnectionError({
+          message: `Malformed streaming event (not JSON): ${data.slice(0, 200)}`,
+        });
       }
 
       if (parsed !== null && typeof parsed === "object" && "error" in parsed) {

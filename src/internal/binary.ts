@@ -16,6 +16,12 @@ import type { BinaryInput } from "../types/audio";
  * falls back to `btoa` over a binary string, chunked to avoid call-stack limits
  * on large inputs in browser/Deno environments.
  *
+ * @remarks
+ * The fast path reads `globalThis.Buffer`, a mutable global. This is a trust
+ * boundary only in theory: code that can replace `globalThis.Buffer` already
+ * controls the runtime, so no in-SDK validation would meaningfully help. The
+ * `btoa` fallback is used in environments without `Buffer` (browsers).
+ *
  * @param bytes - The raw bytes to encode.
  * @returns The base64 representation.
  */

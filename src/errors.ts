@@ -90,7 +90,14 @@ export abstract class SkailarError extends Error {
   readonly status: number | null;
   /** Machine-readable error code from the body, if any. */
   readonly code: string | undefined;
-  /** Correlation id from the `x-request-id` response header, if any. */
+  /**
+   * Correlation id from the `x-request-id` response header, if any, for support.
+   *
+   * @remarks
+   * Populated on error responses. It is **not** currently surfaced for successful
+   * streaming or audio responses (which return a stream rather than a wrapper),
+   * so capture it from a thrown {@link SkailarError} when filing a ticket.
+   */
   readonly requestId: string | undefined;
   /** The raw response body captured for debugging. */
   readonly raw: unknown;
