@@ -57,10 +57,39 @@ async function _typeProbe(client: Skailar): Promise<void> {
   const d = client.chat.completions.create({ ...base, stream: shouldStream ? true : false });
   expectType<Exact<typeof d, Promise<ChatCompletion | ChatCompletionStream>>>();
 
+  const toolOnly: ChatCompletion = {
+    id: "chatcmpl_tool",
+    object: "chat.completion",
+    created: 1,
+    model: "gpt-5",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
+  const toolOnlyContent = toolOnly.choices[0]!.message.content;
+  expectType<Exact<typeof toolOnlyContent, string | null>>();
+
   void a;
   void b;
   void c;
   void d;
+  void toolOnly;
+  void toolOnlyContent;
 }
 void _typeProbe;
 

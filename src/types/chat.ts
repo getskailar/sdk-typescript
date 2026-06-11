@@ -233,8 +233,8 @@ export interface ChatCompletionChoice {
   index: number;
   message: {
     role: "assistant";
-    /** The generated text; may be empty when only tool calls are present. */
-    content: string;
+    /** The generated text, or `null` when only tool calls are present. */
+    content: string | null;
     /** Reasoning trace for models that expose their thinking (e.g. DeepSeek). */
     reasoning_content?: string;
     /** Tool calls the assistant requested, if any. */
